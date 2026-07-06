@@ -1,0 +1,384 @@
+{
+  "name": "NeuroAudit Agent v3",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        -80
+      ],
+      "id": "telegram-trigger-node",
+      "name": "Telegram Trigger",
+      "webhookId": "YOUR_WEBHOOK_ID",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "google/gemini-2.5-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        160,
+        256
+      ],
+      "id": "openrouter-chat-model-node",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "YOUR_OPENROUTER_CREDENTIAL_ID",
+          "name": "OpenRouter Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===============================\n// NeuroAudit – JavaScript Mapper\n// ===============================\n\n// 1. Get AI output\nconst aiOutput = $input.item.json.output;\n\n// 2. Helper normalizers (MATCH Google Sheet dropdowns exactly)\nfunction normalizeAgeGroup(v) {\n  const s = String(v ?? \"\").trim().toLowerCase();\n  if ([\"adult\", \"adults\"].includes(s)) return \"Adult\";\n  if ([\"paediatric\", \"pediatric\", \"paeds\", \"peds\", \"child\", \"children\"].includes(s)) {\n    return \"Paediatric\";\n  }\n  return \"Adult\"; // safe fallback\n}\n\nfunction normalizeUrgency(v) {\n  const s = String(v ?? \"\").trim().toLowerCase();\n  if ([\"emergency\", \"emer\", \"urgent\", \"trauma\", \"stat\"].includes(s)) return \"Emergency\";\n  if ([\"elective\", \"routine\", \"planned\", \"semi-elective\", \"semielective\"].includes(s))\n    return \"Elective\";\n  return \"Emergency\"; // safe fallback\n}\n\n// 2b. Category normalizer (trust CATEGORY first, infer from DX/OP only if needed)\nfunction normalizeCategory(category, diagnosis = \"\", operation = \"\") {\n  const catRaw = String(category ?? \"\").trim();\n  const cat = catRaw.toLowerCase();\n\n  const dx = String(diagnosis ?? \"\").toLowerCase();\n  const op = String(operation ?? \"\").toLowerCase();\n  const text = `${cat} ${dx} ${op}`;\n\n  // ---------- 1) Trust provided CATEGORY first (snap variants) ----------\n  // Cranioplasty (autologous, titanium mesh, PEEK)\n  if (cat.includes(\"cranioplasty\")) return \"Cranioplasty\";\n\n  // CSF diversion temporary/permanent (accept hyphen variants)\n  if (cat.includes(\"csf\") && (cat.includes(\"temp\") || cat.includes(\"temporary\")))\n    return \"CSF diversion – temporary\";\n  if (cat.includes(\"csf\") && (cat.includes(\"perm\") || cat.includes(\"permanent\")))\n    return \"CSF diversion – permanent\";\n\n  // Trauma (accept spacing variants)\n  if (cat.includes(\"trauma\") && (cat.includes(\"craniotomy\") || cat.includes(\"craniectomy\")))\n    return \"Trauma (Craniotomy / Craniectomy)\";\n\n  // Brain tumor\n  if (cat.includes(\"brain tumor\") || cat.includes(\"brain tumour\"))\n    return \"Brain tumor (Primary / Secondary)\";\n\n  // Infection (cranio)\n  if (cat.includes(\"infection\")) return \"Infection (cranio)\";\n\n  // Others\n  if (cat === \"others\" || cat.includes(\"other\")) return \"Others\";\n\n  // Aneurysm / AVM\n  if (cat.includes(\"aneurysm\")) return \"Aneurysm\";\n  if (cat.includes(\"avm\") || cat.includes(\"bypass\")) return \"AVM / Bypass\";\n\n  // Functional / Epilepsy\n  if (cat.includes(\"functional\")) return \"Functional neurosurgery\";\n  if (cat.includes(\"epilepsy\")) return \"Epilepsy surgery\";\n\n  // Spine categories\n  if (cat.includes(\"spine trauma\")) return \"Spine trauma\";\n  if (cat.includes(\"spine tumor\")) return \"Spine tumor\";\n  if (cat.includes(\"spine degenerative\")) return \"Spine degenerative\";\n  if (cat.includes(\"spine dysraphism\")) return \"Spine dysraphism\";\n  if (cat.includes(\"spine\")) return \"Spine – Other\";\n\n  // ICB / Infarction\n  if (cat.includes(\"icb\") || cat.includes(\"ich\") || cat.includes(\"infarct\") || cat.includes(\"stroke\"))\n    return \"ICB / Infarction\";\n\n  // Tracheostomy / Burr hole / Wound debridement\n  if (cat.includes(\"tracheostomy\")) return \"Tracheostomy\";\n  if (cat.includes(\"burr\")) return \"Burr hole (CSDH)\";\n  if (cat.includes(\"debrid\")) return \"Wound debridement\";\n\n  // ---------- 2) If CATEGORY is missing/unclear, infer from DX/OP ----------\n  // Cranioplasty inference\n  if (\n    dx.includes(\"skull defect\") ||\n    op.includes(\"cranioplasty\") ||\n    op.includes(\"peek\") ||\n    op.includes(\"titanium mesh\")\n  ) {\n    return \"Cranioplasty\";\n  }\n\n  // CSF diversion inference (temporary)\n  if (\n    op.includes(\"evd\") ||\n    op.includes(\"external ventricular\") ||\n    op.includes(\"icp\") ||\n    op.includes(\"bolt\") ||\n    op.includes(\"probe\") ||\n    op.includes(\"monitor\")\n  ) {\n    return \"CSF diversion – temporary\";\n  }\n\n  // CSF diversion inference (permanent)\n  if (\n    op.includes(\"vp shunt\") ||\n    op.includes(\"vps\") ||\n    op.includes(\"ventriculoperitoneal\") ||\n    op.includes(\"lps\")\n  ) {\n    return \"CSF diversion – permanent\";\n  }\n\n  // Burr hole inference\n  if (dx.includes(\"csdh\") || dx.includes(\"chronic subdural\") || op.includes(\"burr hole\")) {\n    return \"Burr hole (CSDH)\";\n  }\n\n  // Others inference (scalp lesions etc.)\n  if (\n    dx.includes(\"scalp\") ||\n    dx.includes(\"sebaceous\") ||\n    dx.includes(\"lipoma\") ||\n    op.includes(\"scalp\")\n  ) {\n    return \"Others\";\n  }\n\n  // ICB / infarction inference\n  if (\n    dx.includes(\"ich\") ||\n    dx.includes(\"intracerebral\") ||\n    dx.includes(\"icb\") ||\n    dx.includes(\"infarct\") ||\n    dx.includes(\"infarction\") ||\n    dx.includes(\"mca infarct\") ||\n    dx.includes(\"stroke\")\n  ) {\n    return \"ICB / Infarction\";\n  }\n\n  // Trauma inference (only if clear trauma keywords)\n  if (\n    dx.includes(\"tbi\") ||\n    dx.includes(\"sdh\") ||\n    dx.includes(\"edh\") ||\n    op.includes(\"decompressive craniectomy\") ||\n    op.includes(\"eoc\")\n  ) {\n    return \"Trauma (Craniotomy / Craniectomy)\";\n  }\n\n  // Brain tumor inference\n  if (dx.includes(\"meningioma\") || dx.includes(\"glioma\") || dx.includes(\"tumor\") || dx.includes(\"tumour\"))\n    return \"Brain tumor (Primary / Secondary)\";\n\n  // Infection inference\n  if (dx.includes(\"empyema\") || dx.includes(\"abscess\")) return \"Infection (cranio)\";\n\n  // Tracheostomy inference\n  if (op.includes(\"tracheostomy\")) return \"Tracheostomy\";\n\n  // ---------- 3) Final fallback ----------\n  return \"Others\";\n}\n\n// 3. Parse JSON safely\nlet data;\ntry {\n  const cleanedJson = String(aiOutput ?? \"\")\n    .replace(/```json/g, \"\")\n    .replace(/```/g, \"\")\n    .trim();\n  data = JSON.parse(cleanedJson);\n} catch (error) {\n  return [\n    {\n      json: {\n        error: \"Failed to parse AI output\",\n        raw: aiOutput,\n      },\n    },\n  ];\n}\n\n// 4. If no surgeries → stop\nif (!data?.surgeries || data.surgeries.length === 0) {\n  return [];\n}\n\n// 5. Telegram metadata\nconst telegramData = $(\"Telegram Trigger\").item.json;\nconst messageId = telegramData.message.message_id;\nconst messageDate = new Date(telegramData.message.date * 1000).toISOString().split(\"T\")[0];\nconst reportedTimestamp = new Date(telegramData.message.date * 1000)\n  .toISOString()\n  .replace(\"T\", \" \")\n  .slice(0, 19);\n\n// 6. ROW MAPPING (THIS is what feeds Google Sheets)\nconst rows = data.surgeries.map((surgery) => ({\n  surgery_date: surgery.surgery_date || messageDate,\n  reported_ts: reportedTimestamp,\n  reporter_name: data.reporter_name || \"Unknown\",\n  telegram_message_id: messageId,\n  patient_name: surgery.patient_name || \"Unknown\",\n  patient_ic_mrn: surgery.patient_ic_mrn || surgery.patient_ic || \"Unknown\",\n  age_group: normalizeAgeGroup(surgery.age_group),\n  urgency: normalizeUrgency(surgery.urgency),\n  surgery_category: normalizeCategory(\n    surgery.surgery_category,\n    surgery.diagnosis,\n    surgery.operation\n  ),\n  diagnosis: surgery.diagnosis || \"\",\n  operation: surgery.operation || \"\",\n}));\n\n// 7. Output to next node\nreturn rows.map((row) => ({ json: row }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        576,
+        80
+      ],
+      "id": "javascript-mapper-node",
+      "name": "JavaScript Data Mapper"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "raw_telegram_log"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "YOUR_SHEET_GID",
+          "mode": "list",
+          "cachedResultName": "raw_telegram_log"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Raw_Message_Text": "={{ $json.message.text }}",
+            "Timestamp": "={{ $json.message.date }}",
+            "Sender_Name": "={{ $json.message.from.first_name }}",
+            "Chat_ID": "={{ $json.message.chat.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Sender_Name",
+              "displayName": "Sender_Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Chat_ID",
+              "displayName": "Chat_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Raw_Message_Text",
+              "displayName": "Raw_Message_Text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        288,
+        -224
+      ],
+      "id": "raw-telegram-log-node",
+      "name": "Raw Telegram Log",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_CREDENTIAL_ID",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message.text }}",
+        "options": {
+          "systemMessage": "You are a Neurosurgical Surgery Audit Assistant.\nYour task is to extract ONLY surgical procedure information from Telegram messages.\n\nSTRICT RULES:\n1. Extract only actual operations/surgeries performed (ignore referrals, admissions, clinic visits).\n2. If no surgery is mentioned, return: {\"surgeries\": []}\n\n3. Categorize each surgery into EXACTLY ONE of these categories:\n   - Trauma (Craniotomy / Craniectomy)\n   - ICB / infarction\n   - Brain tumor (Primary / Secondary)\n   - Infection (cranio)\n   - Endoscopic transsphenoidal surgery\n   - Aneurysm\n   - AVM / Bypass\n   - Functional neurosurgery\n   - Epilepsy surgery\n   - Cranio-endoscopic\n   - Cranioplasty\n   - Spine trauma\n   - Spine tumor\n   - Spine degenerative\n   - Spine dysraphism\n   - Spine – Other\n   - CSF diversion – temporary\n   - CSF diversion – permanent\n   - Tracheostomy\n   - Wound debridement\n   - Burr hole (CSDH)\n   - Others\n\n4. Determine AGE_GROUP:\n   - \"Paediatric\" if age < 12 years\n   - \"Adult\" if age >= 12 years\n   - AGE_GROUP must be EXACTLY one of these two values only: \"Adult\" or \"Paediatric\"\n   - Do NOT output \"Pediatric\" (US spelling) or any other variation.\n\n5. Determine URGENCY:\n   - \"Emergency\" if described as urgent/emergency/trauma\n   - \"Elective\" if scheduled/planned\n   - URGENCY must be EXACTLY one of these two values only: \"Emergency\" or \"Elective\"\n\n6. Identifier handling:\n   - If the message uses IC= OR ICMRN= OR MRN= treat it as the same identifier and output it into patient_ic_mrn.\n\n7. Category mapping rules (apply these to reduce ambiguity):\n   - ICP probe insertion / ICP monitor / ICP bolt / intraparenchymal ICP monitor:\n     → classify as \"CSF diversion – temporary\"\n   - Intracranial bleeding due to hypertensive emergency / ICH / intracerebral bleed / ICB / basal ganglia bleed / lobar ICH\n     OR infarction cases such as MCA infarction / malignant MCA infarction / cerebellar infarction / large territory infarct\n     (including decompressive craniectomy performed for these):\n     → classify as \"ICB / infarction\"\n   - Scalp lesion / scalp mass / sebaceous cyst / lipoma / scalp cyst / excision of scalp lesion:\n     → classify as \"Others\"\n\nOUTPUT FORMAT (JSON only, no markdown; no extra keys; no commentary):\n{\n  \"reporter_name\": \"Dr. [Name]\",\n  \"surgeries\": [\n    {\n      \"surgery_date\": \"YYYY-MM-DD\",\n      \"patient_name\": \"[Name or Unknown]\",\n      \"patient_ic_mrn\": \"[IC/MRN or Unknown]\",\n      \"age_group\": \"Adult or Paediatric\",\n      \"urgency\": \"Emergency or Elective\",\n      \"surgery_category\": \"[Exact category from list above]\",\n      \"diagnosis\": \"[Full diagnosis]\",\n      \"operation\": \"[Surgical procedure performed]\"\n    }\n  ]\n}\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        224,
+        80
+      ],
+      "id": "ai-agent-node",
+      "name": "AI Surgery Parser"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "surgery_audit_sheet"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "YOUR_SHEET_GID",
+          "mode": "list",
+          "cachedResultName": "master_surgery_sheet"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "surgery_date": "={{ $json.surgery_date }}",
+            "reporter_name": "={{ $json.reporter_name }}",
+            "telegram_message_id": "={{ $json.telegram_message_id }}",
+            "patient_name": "={{ $json.patient_name }}",
+            "patient_ic_mrn": "={{ $json.patient_ic_mrn }}",
+            "age_group": "={{ $json.age_group }}",
+            "urgency": "={{ $json.urgency }}",
+            "surgery_category": "={{ $json.surgery_category }}",
+            "diagnosis": "={{ $json.diagnosis }}",
+            "operation": "={{ $json.operation }}",
+            "reported_ts": "={{ $json.reported_ts }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "surgery_id",
+              "displayName": "surgery_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "surgery_date",
+              "displayName": "surgery_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reported_ts",
+              "displayName": "reported_ts",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reporter_name",
+              "displayName": "reporter_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "telegram_message_id",
+              "displayName": "telegram_message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "patient_name",
+              "displayName": "patient_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "patient_ic_mrn",
+              "displayName": "patient_ic_mrn",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "age_group",
+              "displayName": "age_group",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "urgency",
+              "displayName": "urgency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "surgery_category",
+              "displayName": "surgery_category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "diagnosis",
+              "displayName": "diagnosis",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "operation",
+              "displayName": "operation",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        800,
+        80
+      ],
+      "id": "google-sheet-output-node",
+      "name": "Surgery Audit Output",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_CREDENTIAL_ID",
+          "name": "Google Sheets Account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Raw Telegram Log",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AI Surgery Parser",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Surgery Parser",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "JavaScript Data Mapper": {
+      "main": [
+        [
+          {
+            "node": "Surgery Audit Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Raw Telegram Log": {
+      "main": [
+        []
+      ]
+    },
+    "AI Surgery Parser": {
+      "main": [
+        [
+          {
+            "node": "JavaScript Data Mapper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

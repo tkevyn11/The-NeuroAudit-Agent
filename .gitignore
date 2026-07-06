@@ -1,0 +1,53 @@
+# Sensitive files with credentials
+*.txt
+!template for text.txt
+!README.md
+
+# Files with API keys and tokens
+v2 prompt/
+v3 prompt - add category/
+!workflows/
+!prompts/
+!code/
+
+# CSV files with potential patient data
+*.csv
+
+# Office documents
+*.docx
+*.pptx
+*.pdf
+
+# Large image files from development
+Gemini_Generated_Image_*.png
+Chatgroup logo.png
+NeuroAudit Surgery HPP MO instruction.png
+Slide Mesyuarat Jabatan Neurosurgeri 2025.pptx
+
+# Keep only essential assets
+!assets/neuroaudit-agent-workflow.png
+!assets/dashboard.png
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# n8n specific (if running locally)
+.n8n/
