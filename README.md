@@ -402,8 +402,8 @@ This system is designed as a proof-of-concept and should be adapted to meet spec
 ## 📧 Contact
 
 **Developer**: Kevin Tan  
-**LinkedIn**: [tkevn11](https://linkedin.com/in/tkevn11)  
-**GitHub**: [tkevn11](https://github.com/tkevn11)
+**LinkedIn**: [tkevyn11](https://linkedin.com/in/tkevyn11)  
+**GitHub**: [tkevyn11](https://github.com/tkevyn11)
 
 ---
 
